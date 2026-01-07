@@ -1,36 +1,55 @@
 const WebSocket = require("ws");
-const PORT = process.env.PORT || 8080;
+const wss = new WebSocket.Server({ port: process.env.PORT || 8080 });
 
-const wss = new WebSocket.Server({ port: PORT });
-let waiting = [];
+let senders = [];
+let viewers = [];
 
 wss.on("connection", ws => {
   ws.id = Math.random().toString(36).slice(2, 8);
-  waiting.push(ws);
-
-  if (waiting.length >= 2) {
-    const a = waiting.shift();
-    const b = waiting.shift();
-
-    a.peer = b.id;
-    b.peer = a.id;
-
-    a.send(JSON.stringify({ type: "paired", peer: b.id }));
-    b.send(JSON.stringify({ type: "paired", peer: a.id }));
-  }
 
   ws.on("message", msg => {
     const data = JSON.parse(msg);
-    const peer = [...wss.clients].find(c => c.id === data.to);
-    if (peer) peer.send(JSON.stringify({
-      type: "signal",
-      payload: data.payload
-    }));
+
+    // 1️⃣ Registro de rol
+    if (data.type === "role") {
+      ws.role = data.role;
+
+      if (ws.role === "sender") senders.push(ws);
+      if (ws.role === "viewer") viewers.push(ws);
+
+      tryPair();
+    }
+
+    // 2️⃣ Reenvío de señal WebRTC
+    if (data.type === "signal") {
+      const peer = [...wss.clients].find(c => c.id === data.to);
+      if (peer) {
+        peer.send(JSON.stringify({
+          type: "signal",
+          payload: data.payload
+        }));
+      }
+    }
   });
 
   ws.on("close", () => {
-    waiting = waiting.filter(c => c !== ws);
+    senders = senders.filter(c => c !== ws);
+    viewers = viewers.filter(c => c !== ws);
   });
 });
 
-console.log("🚀 Relay activo");
+// 🔗 Emparejar sender + viewer
+function tryPair() {
+  if (senders.length > 0 && viewers.length > 0) {
+    const sender = senders.shift();
+    const viewer = viewers.shift();
+
+    sender.peer = viewer.id;
+    viewer.peer = sender.id;
+
+    sender.send(JSON.stringify({ type: "paired", peer: viewer.id }));
+    viewer.send(JSON.stringify({ type: "paired", peer: sender.id }));
+  }
+}
+
+console.log("🚀 Relay WebSocket activo");
